@@ -66,6 +66,7 @@ python tools/test.py configs/hrnet/hrnet-w18_4xb32_in1k.py https://download.open
 | `hrnet-w44_3rdparty_8xb32_in1k`\*      | From scratch |   67.06    |   14.96   |   78.88   |   94.37   | [config](hrnet-w44_4xb32_in1k.py) | [model](https://download.openmmlab.com/mmclassification/v0/hrnet/hrnet-w44_3rdparty_8xb32_in1k_20220120-35d07f73.pth) |
 | `hrnet-w48_3rdparty_8xb32_in1k`\*      | From scratch |   77.47    |   17.36   |   79.32   |   94.52   | [config](hrnet-w48_4xb32_in1k.py) | [model](https://download.openmmlab.com/mmclassification/v0/hrnet/hrnet-w48_3rdparty_8xb32_in1k_20220120-e555ef50.pth) |
 | `hrnet-w64_3rdparty_8xb32_in1k`\*      | From scratch |   128.06   |   29.00   |   79.46   |   94.65   | [config](hrnet-w64_4xb32_in1k.py) | [model](https://download.openmmlab.com/mmclassification/v0/hrnet/hrnet-w64_3rdparty_8xb32_in1k_20220120-19126642.pth) |
+| `hrnet-w72_8xb32_in1k`                 | From scratch |   TBA   |   TBA   |   81.58   |   95.76   | [config](hrnet-w72_8xb32_in1k.py) | --- |
 | `hrnet-w18_3rdparty_8xb32-ssld_in1k`\* | From scratch |   21.30    |   4.33    |   81.06   |   95.70   | [config](hrnet-w18_4xb32_in1k.py) | [model](https://download.openmmlab.com/mmclassification/v0/hrnet/hrnet-w18_3rdparty_8xb32-ssld_in1k_20220120-455f69ea.pth) |
 | `hrnet-w48_3rdparty_8xb32-ssld_in1k`\* | From scratch |   77.47    |   17.36   |   83.63   |   96.79   | [config](hrnet-w48_4xb32_in1k.py) | [model](https://download.openmmlab.com/mmclassification/v0/hrnet/hrnet-w48_3rdparty_8xb32-ssld_in1k_20220120-d0459c38.pth) |
 

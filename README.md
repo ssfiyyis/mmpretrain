@@ -1,3 +1,13 @@
+## This is a fork of OpenMMLab's mmpretrain
+## Recent updates
+### Aug 26, 2025
+* Add extra variation of HRNet namely HRNet-w72
+* Refer to [doc]([configs/hrnet/README.md]) for more information
+
+---
+(Contents from here is the original description)
+---
+
 <div align="center">
 
 <img src="resources/mmpt-logo.png" width="600"/>
