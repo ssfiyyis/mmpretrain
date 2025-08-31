@@ -1,5 +1,5 @@
 _base_ = [
-    '../_base_/models/hrnet/hrnet-w72.py',
+    '../_base_/models/phrnet/phrnet-w72.py',
     '../_base_/datasets/imagenet_bs32_pil_resize.py',
     '../_base_/schedules/imagenet_bs256_coslr.py',
     '../_base_/default_runtime.py'
@@ -10,6 +10,12 @@ _base_ = [
 # # base_batch_size = (8 GPUs) x (32 samples per GPU)
 # auto_scale_lr = dict(base_batch_size=256)
 # # 256 is the default setting in imagenet_bs256_coslr.py, no need to redefine it
+
+# learning policy
+param_scheduler = dict(
+    type='CosineAnnealingLR', T_max=120, by_epoch=True, begin=0, end=120)
+# train, val, test setting
+train_cfg = dict(by_epoch=True, max_epochs=120, val_interval=1)
 
 dataset_type = 'ImageNet'
 

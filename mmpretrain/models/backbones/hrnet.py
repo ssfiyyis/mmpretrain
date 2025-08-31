@@ -5,7 +5,104 @@ from mmengine.model import BaseModule, ModuleList, Sequential
 from torch.nn.modules.batchnorm import _BatchNorm
 
 from mmpretrain.registry import MODELS
-from .resnet import BasicBlock, Bottleneck, ResLayer, get_expansion
+from .resnet import BasicBlock, Bottleneck
+from .PSA import PSABasicBlock, get_expansion_psa
+
+
+class ResLayerPSA(nn.Sequential):
+    """ResLayer to build ResNet style backbone.
+
+    Args:
+        block (nn.Module): Residual block used to build ResLayer.
+        num_blocks (int): Number of blocks.
+        in_channels (int): Input channels of this block.
+        out_channels (int): Output channels of this block.
+        expansion (int, optional): The expansion for BasicBlock/Bottleneck.
+            If not specified, it will firstly be obtained via
+            ``block.expansion``. If the block has no attribute "expansion",
+            the following default values will be used: 1 for BasicBlock and
+            4 for Bottleneck. Default: None.
+        stride (int): stride of the first block. Default: 1.
+        avg_down (bool): Use AvgPool instead of stride conv when
+            downsampling in the bottleneck. Default: False
+        conv_cfg (dict, optional): dictionary to construct and config conv
+            layer. Default: None
+        norm_cfg (dict): dictionary to construct and config norm layer.
+            Default: dict(type='BN')
+        drop_path_rate (float or list): stochastic depth rate.
+            Default: 0.
+    """
+
+    def __init__(self,
+                 block,
+                 num_blocks,
+                 in_channels,
+                 out_channels,
+                 expansion=None,
+                 stride=1,
+                 avg_down=False,
+                 conv_cfg=None,
+                 norm_cfg=dict(type='BN'),
+                 drop_path_rate=0.0,
+                 **kwargs):
+        self.block = block
+        self.expansion = get_expansion_psa(block, expansion)
+
+        if isinstance(drop_path_rate, float):
+            drop_path_rate = [drop_path_rate] * num_blocks
+
+        assert len(drop_path_rate
+                   ) == num_blocks, 'Please check the length of drop_path_rate'
+
+        downsample = None
+        if stride != 1 or in_channels != out_channels:
+            downsample = []
+            conv_stride = stride
+            if avg_down and stride != 1:
+                conv_stride = 1
+                downsample.append(
+                    nn.AvgPool2d(
+                        kernel_size=stride,
+                        stride=stride,
+                        ceil_mode=True,
+                        count_include_pad=False))
+            downsample.extend([
+                build_conv_layer(
+                    conv_cfg,
+                    in_channels,
+                    out_channels,
+                    kernel_size=1,
+                    stride=conv_stride,
+                    bias=False),
+                build_norm_layer(norm_cfg, out_channels)[1]
+            ])
+            downsample = nn.Sequential(*downsample)
+
+        layers = []
+        layers.append(
+            block(
+                in_channels=in_channels,
+                out_channels=out_channels,
+                expansion=self.expansion,
+                stride=stride,
+                downsample=downsample,
+                conv_cfg=conv_cfg,
+                norm_cfg=norm_cfg,
+                drop_path_rate=drop_path_rate[0],
+                **kwargs))
+        in_channels = out_channels
+        for i in range(1, num_blocks):
+            layers.append(
+                block(
+                    in_channels=in_channels,
+                    out_channels=out_channels,
+                    expansion=self.expansion,
+                    stride=1,
+                    conv_cfg=conv_cfg,
+                    norm_cfg=norm_cfg,
+                    drop_path_rate=drop_path_rate[i],
+                    **kwargs))
+        super(ResLayerPSA, self).__init__(*layers)
 
 
 class HRModule(BaseModule):
@@ -86,9 +183,9 @@ class HRModule(BaseModule):
         branches = []
 
         for i in range(num_branches):
-            out_channels = num_channels[i] * get_expansion(block)
+            out_channels = num_channels[i] * get_expansion_psa(block)
             branches.append(
-                ResLayer(
+                ResLayerPSA(
                     block=block,
                     num_blocks=num_blocks[i],
                     in_channels=self.in_channels[i],
@@ -301,6 +398,11 @@ class HRNet(BaseModule):
                 [1, 2, 'BASIC',      (4, 4),       (64, 128)],
                 [4, 3, 'BASIC',      (4, 4, 4),    (64, 128, 256)],
                 [3, 4, 'BASIC',      (4, 4, 4, 4), (64, 128, 256, 512)]],
+        'w64d': [[1, 1, 'BOTTLENECK', (4, ),        (64, )],
+                [1, 2, 'BASIC',      (4, 4),       (64, 128)],
+                [4, 3, 'BASIC',      (4, 4, 4),    (64, 128, 256)],
+                [3, 4, 'BASIC',      (4, 4, 4, 4), (64, 128, 256, 512)],
+                [3, 5, 'BASIC',      (4, 4, 4, 4, 4), (64, 128, 256, 512, 1024)]],
         'w72': [[1, 1, 'BOTTLENECK', (4, ),        (72, )],
                 [1, 2, 'BASIC',      (4, 4),       (72, 144)],
                 [4, 3, 'BASIC',      (4, 4, 4),    (72, 144, 288)],
@@ -378,10 +480,10 @@ class HRNet(BaseModule):
 
         block = self.blocks_dict[block_type]
         num_channels = [
-            channel * get_expansion(block) for channel in base_channels
+            channel * get_expansion_psa(block) for channel in base_channels
         ]
         # To align with the original code, use layer1 instead of stage1 here.
-        self.layer1 = ResLayer(
+        self.layer1 = ResLayerPSA(
             block,
             in_channels=64,
             out_channels=num_channels[0],
@@ -396,7 +498,7 @@ class HRNet(BaseModule):
             multiscale_output_ = multiscale_output if i == 4 else True
 
             num_channels = [
-                channel * get_expansion(block) for channel in base_channels
+                channel * get_expansion_psa(block) for channel in base_channels
             ]
             # The transition layer from layer1 to stage2
             transition = self._make_transition_layer(pre_num_channels,
@@ -565,3 +667,48 @@ class HRNet(BaseModule):
             )
 
         return extra
+
+
+@MODELS.register_module()
+class PHRNet(HRNet):
+    blocks_dict = {'BOTTLENECK': Bottleneck, "PSABASICBLOCK":PSABasicBlock}
+    arch_zoo = {
+        # num_modules, num_branches, block, num_blocks, num_channels
+        'w18': [[1, 1, 'BOTTLENECK', (4, ),        (64, )],
+                [1, 2, 'PSABASICBLOCK',      (4, 4),       (18, 36)],
+                [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (18, 36, 72)],
+                [3, 4, 'PSABASICBLOCK',      (4, 4, 4, 4), (18, 36, 72, 144)]],
+        'w30': [[1, 1, 'BOTTLENECK', (4, ),        (64, )],
+                [1, 2, 'PSABASICBLOCK',      (4, 4),       (30, 60)],
+                [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (30, 60, 120)],
+                [3, 4, 'PSABASICBLOCK',      (4, 4, 4, 4), (30, 60, 120, 240)]],
+        'w32': [[1, 1, 'BOTTLENECK', (4, ),        (64, )],
+                [1, 2, 'PSABASICBLOCK',      (4, 4),       (32, 64)],
+                [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (32, 64, 128)],
+                [3, 4, 'PSABASICBLOCK',      (4, 4, 4, 4), (32, 64, 128, 256)]],
+        'w40': [[1, 1, 'BOTTLENECK', (4, ),        (64, )],
+                [1, 2, 'PSABASICBLOCK',      (4, 4),       (40, 80)],
+                [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (40, 80, 160)],
+                [3, 4, 'PSABASICBLOCK',      (4, 4, 4, 4), (40, 80, 160, 320)]],
+        'w44': [[1, 1, 'BOTTLENECK', (4, ),        (64, )],
+                [1, 2, 'PSABASICBLOCK',      (4, 4),       (44, 88)],
+                [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (44, 88, 176)],
+                [3, 4, 'PSABASICBLOCK',      (4, 4, 4, 4), (44, 88, 176, 352)]],
+        'w48': [[1, 1, 'BOTTLENECK', (4, ),        (64, )],
+                [1, 2, 'PSABASICBLOCK',      (4, 4),       (48, 96)],
+                [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (48, 96, 192)],
+                [3, 4, 'PSABASICBLOCK',      (4, 4, 4, 4), (48, 96, 192, 384)]],
+        'w64': [[1, 1, 'BOTTLENECK', (4, ),        (64, )],
+                [1, 2, 'PSABASICBLOCK',      (4, 4),       (64, 128)],
+                [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (64, 128, 256)],
+                [3, 4, 'PSABASICBLOCK',      (4, 4, 4, 4), (64, 128, 256, 512)]],
+        'w64d': [[1, 1, 'BOTTLENECK', (4, ),        (64, )],
+                [1, 2, 'PSABASICBLOCK',      (4, 4),       (64, 128)],
+                [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (64, 128, 256)],
+                [3, 4, 'PSABASICBLOCK',      (4, 4, 4, 4), (64, 128, 256, 512)],
+                [3, 5, 'PSABASICBLOCK',      (4, 4, 4, 4, 4), (64, 128, 256, 512, 1024)]],
+        'w72': [[1, 1, 'BOTTLENECK', (4, ),        (72, )],
+                [1, 2, 'PSABASICBLOCK',      (4, 4),       (72, 144)],
+                [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (72, 144, 288)],
+                [3, 4, 'PSABASICBLOCK',      (4, 4, 4, 4), (72, 144, 288, 576)]],
+    }  # yapf:disable

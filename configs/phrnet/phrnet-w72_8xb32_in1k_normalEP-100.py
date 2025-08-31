@@ -1,15 +1,46 @@
+# from mmengine.config import read_base
+# with read_base():
+#     from .._base_.datasets.imagenet_bs32_pil_resize import *
+#     from .._base_.default_runtime import *
+#     from .._base_.schedules.imagenet_bs256_coslr import *
+# _base_ = [
+#     '../_base_/models/phrnet/phrnet-w72.py',
+# ]
+
 _base_ = [
-    '../_base_/models/hrnet/hrnet-w72.py',
+    '../_base_/models/phrnet/phrnet-w72.py',
     '../_base_/datasets/imagenet_bs32_pil_resize.py',
     '../_base_/schedules/imagenet_bs256_coslr.py',
     '../_base_/default_runtime.py'
 ]
+
+# from mmengine.visualization import LocalVisBackend, WandbVisBackend
+# vis_backends.update(dict(type=WandbVisBackend))
+# vis_backends.update(dict(type=LocalVisBackend))
+# visualizer.update(dict(vis_backends=vis_backends))
+
+vis_backends = [dict(type='LocalVisBackend'),
+                dict(type='WandbVisBackend',
+                     init_kwargs=dict(
+                         project='Pretraining-of-HRNets',  # project name
+                         name='phrnet-w72_8xb32_in1k_normalEP-100',       # experiment name
+                         tags=['phrnet', 'classification', 'imagenet'],
+                         notes='PHRNet-W72 training on ImageNet-1K'
+                     ),
+                     )]
+visualizer = dict(type='UniversalVisualizer', vis_backends=vis_backends)
 
 # # NOTE: `auto_scale_lr` is for automatically scaling LR
 # # based on the actual training batch size.
 # # base_batch_size = (8 GPUs) x (32 samples per GPU)
 # auto_scale_lr = dict(base_batch_size=256)
 # # 256 is the default setting in imagenet_bs256_coslr.py, no need to redefine it
+
+# # learning policy ep=120 -> ep=100
+# param_scheduler = dict(
+#     type='CosineAnnealingLR', T_max=120, by_epoch=True, begin=0, end=120)
+# # train, val, test setting
+# train_cfg = dict(by_epoch=True, max_epochs=120, val_interval=1)
 
 dataset_type = 'ImageNet'
 
