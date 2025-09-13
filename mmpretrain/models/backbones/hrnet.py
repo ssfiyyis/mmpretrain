@@ -7,7 +7,7 @@ from torch.nn.modules.batchnorm import _BatchNorm
 from mmpretrain.registry import MODELS
 from .resnet import BasicBlock, Bottleneck
 from .PSA import PSABasicBlock, get_expansion_psa
-
+import sys
 
 class ResLayerPSA(nn.Sequential):
     """ResLayer to build ResNet style backbone.
@@ -284,6 +284,85 @@ class HRModule(BaseModule):
         return x_fuse
 
 
+class PHRModule(HRModule):
+    """High-Resolution Module for HRNet.
+
+    In this module, every branch has 4 BasicBlocks/Bottlenecks. Fusion/Exchange
+    is in this module.
+
+    Args:
+        num_branches (int): The number of branches.
+        block (``BaseModule``): Convolution block module.
+        num_blocks (tuple): The number of blocks in each branch.
+            The length must be equal to ``num_branches``.
+        num_channels (tuple): The number of base channels in each branch.
+            The length must be equal to ``num_branches``.
+        multiscale_output (bool): Whether to output multi-level features
+            produced by multiple branches. If False, only the first level
+            feature will be output. Defaults to True.
+        with_cp (bool): Use checkpoint or not. Using checkpoint will save some
+            memory while slowing down the training speed. Defaults to False.
+        conv_cfg (dict, optional): Dictionary to construct and config conv
+            layer. Defaults to None.
+        norm_cfg (dict): Dictionary to construct and config norm layer.
+            Defaults to ``dict(type='BN')``.
+        block_init_cfg (dict, optional): The initialization configs of every
+            blocks. Defaults to None.
+        init_cfg (dict or list[dict], optional): Initialization config dict.
+            Defaults to None.
+    """
+
+    def __init__(self,
+                 num_branches,
+                 block,
+                 num_blocks,
+                 in_channels,
+                 num_channels,
+                 multiscale_output=True,
+                 with_cp=False,
+                 conv_cfg=None,
+                 norm_cfg=dict(type='BN'),
+                 block_init_cfg=None,
+                 init_cfg=None,
+                 attention_module=None):
+        super(HRModule, self).__init__(init_cfg)
+        self.block_init_cfg = block_init_cfg
+        self._check_branches(num_branches, num_blocks, in_channels,
+                             num_channels)
+
+        self.in_channels = in_channels
+        self.num_branches = num_branches
+
+        self.multiscale_output = multiscale_output
+        self.norm_cfg = norm_cfg
+        self.conv_cfg = conv_cfg
+        self.with_cp = with_cp
+        self.branches = self._make_branches(num_branches, block, num_blocks,
+                                            num_channels, attention_module)
+        self.fuse_layers = self._make_fuse_layers()
+        self.relu = nn.ReLU(inplace=False)
+
+    def _make_branches(self, num_branches, block, num_blocks, num_channels, attention_module):
+        branches = []
+
+        for i in range(num_branches):
+            out_channels = num_channels[i] * get_expansion_psa(block)
+            branches.append(
+                ResLayerPSA(
+                    block=block,
+                    num_blocks=num_blocks[i],
+                    in_channels=self.in_channels[i],
+                    out_channels=out_channels,
+                    conv_cfg=self.conv_cfg,
+                    norm_cfg=self.norm_cfg,
+                    with_cp=self.with_cp,
+                    init_cfg=self.block_init_cfg,
+                    attention_module=attention_module
+                ))
+
+        return ModuleList(branches)
+
+
 @MODELS.register_module()
 class HRNet(BaseModule):
     """HRNet backbone.
@@ -399,10 +478,10 @@ class HRNet(BaseModule):
                 [4, 3, 'BASIC',      (4, 4, 4),    (64, 128, 256)],
                 [3, 4, 'BASIC',      (4, 4, 4, 4), (64, 128, 256, 512)]],
         'w64d': [[1, 1, 'BOTTLENECK', (4, ),        (64, )],
-                [1, 2, 'BASIC',      (4, 4),       (64, 128)],
-                [4, 3, 'BASIC',      (4, 4, 4),    (64, 128, 256)],
-                [3, 4, 'BASIC',      (4, 4, 4, 4), (64, 128, 256, 512)],
-                [3, 5, 'BASIC',      (4, 4, 4, 4, 4), (64, 128, 256, 512, 1024)]],
+                 [1, 2, 'BASIC',      (4, 4),       (64, 128)],
+                 [4, 3, 'BASIC',      (4, 4, 4),    (64, 128, 256)],
+                 [3, 4, 'BASIC',      (4, 4, 4, 4), (64, 128, 256, 512)],
+                 [3, 5, 'BASIC',      (4, 4, 4, 4, 4), (64, 128, 256, 512, 1024)]],
         'w72': [[1, 1, 'BOTTLENECK', (4, ),        (72, )],
                 [1, 2, 'BASIC',      (4, 4),       (72, 144)],
                 [4, 3, 'BASIC',      (4, 4, 4),    (72, 144, 288)],
@@ -437,7 +516,7 @@ class HRNet(BaseModule):
             # equal to `num_branches`
             cfg = extra[f'stage{i}']
             assert len(cfg['num_blocks']) == cfg['num_branches'] and \
-                   len(cfg['num_channels']) == cfg['num_branches']
+                len(cfg['num_channels']) == cfg['num_branches']
 
         self.extra = extra
         self.conv_cfg = conv_cfg
@@ -671,7 +750,7 @@ class HRNet(BaseModule):
 
 @MODELS.register_module()
 class PHRNet(HRNet):
-    blocks_dict = {'BOTTLENECK': Bottleneck, "PSABASICBLOCK":PSABasicBlock}
+    blocks_dict = {'BOTTLENECK': Bottleneck, "PSABASICBLOCK": PSABasicBlock}
     arch_zoo = {
         # num_modules, num_branches, block, num_blocks, num_channels
         'w18': [[1, 1, 'BOTTLENECK', (4, ),        (64, )],
@@ -703,12 +782,180 @@ class PHRNet(HRNet):
                 [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (64, 128, 256)],
                 [3, 4, 'PSABASICBLOCK',      (4, 4, 4, 4), (64, 128, 256, 512)]],
         'w64d': [[1, 1, 'BOTTLENECK', (4, ),        (64, )],
-                [1, 2, 'PSABASICBLOCK',      (4, 4),       (64, 128)],
-                [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (64, 128, 256)],
-                [3, 4, 'PSABASICBLOCK',      (4, 4, 4, 4), (64, 128, 256, 512)],
-                [3, 5, 'PSABASICBLOCK',      (4, 4, 4, 4, 4), (64, 128, 256, 512, 1024)]],
+                 [1, 2, 'PSABASICBLOCK',      (4, 4),       (64, 128)],
+                 [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (64, 128, 256)],
+                 [3, 4, 'PSABASICBLOCK', (4, 4, 4, 4), (64, 128, 256, 512)],
+                 [3, 5, 'PSABASICBLOCK',      (4, 4, 4, 4, 4), (64, 128, 256, 512, 1024)]],
         'w72': [[1, 1, 'BOTTLENECK', (4, ),        (72, )],
                 [1, 2, 'PSABASICBLOCK',      (4, 4),       (72, 144)],
                 [4, 3, 'PSABASICBLOCK',      (4, 4, 4),    (72, 144, 288)],
                 [3, 4, 'PSABASICBLOCK',      (4, 4, 4, 4), (72, 144, 288, 576)]],
     }  # yapf:disable
+
+    def __init__(self,
+                 arch='w32',
+                 extra=None,
+                 in_channels=3,
+                 conv_cfg=None,
+                 norm_cfg=dict(type='BN'),
+                 norm_eval=False,
+                 with_cp=False,
+                 zero_init_residual=False,
+                 multiscale_output=True,
+                 attention_module="PSA_s",
+                 init_cfg=[
+                     dict(type='Kaiming', layer='Conv2d'),
+                     dict(
+                         type='Constant',
+                         val=1,
+                         layer=['_BatchNorm', 'GroupNorm'])
+                 ]):
+        super(HRNet, self).__init__(init_cfg)
+
+        extra = self.parse_arch(arch, extra)
+
+        self.attention_module = attention_module
+        for kw in extra.keys():
+            extra[kw]["attention_module"] = self.attention_module
+
+        # Assert configurations of 4 stages are in extra
+        for i in range(1, 5):
+            assert f'stage{i}' in extra, f'Missing stage{i} config in "extra".'
+            # Assert whether the length of `num_blocks` and `num_channels` are
+            # equal to `num_branches`
+            cfg = extra[f'stage{i}']
+            assert len(cfg['num_blocks']) == cfg['num_branches'] and \
+                len(cfg['num_channels']) == cfg['num_branches']
+
+        self.extra = extra
+        self.conv_cfg = conv_cfg
+        self.norm_cfg = norm_cfg
+        self.norm_eval = norm_eval
+        self.with_cp = with_cp
+        self.zero_init_residual = zero_init_residual
+
+        # -------------------- stem net --------------------
+        self.conv1 = build_conv_layer(
+            self.conv_cfg,
+            in_channels,
+            out_channels=64,
+            kernel_size=3,
+            stride=2,
+            padding=1,
+            bias=False)
+
+        self.norm1_name, norm1 = build_norm_layer(self.norm_cfg, 64, postfix=1)
+        self.add_module(self.norm1_name, norm1)
+
+        self.conv2 = build_conv_layer(
+            self.conv_cfg,
+            in_channels=64,
+            out_channels=64,
+            kernel_size=3,
+            stride=2,
+            padding=1,
+            bias=False)
+
+        self.norm2_name, norm2 = build_norm_layer(self.norm_cfg, 64, postfix=2)
+        self.add_module(self.norm2_name, norm2)
+        self.relu = nn.ReLU(inplace=True)
+
+        # -------------------- stage 1 --------------------
+        self.stage1_cfg = self.extra['stage1']
+        base_channels = self.stage1_cfg['num_channels']
+        block_type = self.stage1_cfg['block']
+        num_blocks = self.stage1_cfg['num_blocks']
+
+        block = self.blocks_dict[block_type]
+        num_channels = [
+            channel * get_expansion_psa(block) for channel in base_channels
+        ]
+        # To align with the original code, use layer1 instead of stage1 here.
+        self.layer1 = ResLayerPSA(
+            block,
+            in_channels=64,
+            out_channels=num_channels[0],
+            num_blocks=num_blocks[0])
+        pre_num_channels = num_channels
+
+        # -------------------- stage 2~4 --------------------
+        for i in range(2, 5):
+            stage_cfg = self.extra[f'stage{i}']
+            base_channels = stage_cfg['num_channels']
+            block = self.blocks_dict[stage_cfg['block']]
+            multiscale_output_ = multiscale_output if i == 4 else True
+
+            num_channels = [
+                channel * get_expansion_psa(block) for channel in base_channels
+            ]
+            # The transition layer from layer1 to stage2
+            transition = self._make_transition_layer(pre_num_channels,
+                                                     num_channels)
+            self.add_module(f'transition{i-1}', transition)
+            stage = self._make_stage(
+                stage_cfg, num_channels, multiscale_output=multiscale_output_)
+            self.add_module(f'stage{i}', stage)
+
+            pre_num_channels = num_channels
+
+    def _make_stage(self, layer_config, in_channels, multiscale_output=True):
+        num_modules = layer_config['num_modules']
+        num_branches = layer_config['num_branches']
+        num_blocks = layer_config['num_blocks']
+        num_channels = layer_config['num_channels']
+        attention_module = layer_config['attention_module']
+        block = self.blocks_dict[layer_config['block']]
+
+        hr_modules = []
+        block_init_cfg = None
+        if self.zero_init_residual:
+            if block is BasicBlock:
+                block_init_cfg = dict(
+                    type='Constant', val=0, override=dict(name='norm2'))
+            elif block is Bottleneck:
+                block_init_cfg = dict(
+                    type='Constant', val=0, override=dict(name='norm3'))
+
+        for i in range(num_modules):
+            # multi_scale_output is only used for the last module
+            if not multiscale_output and i == num_modules - 1:
+                reset_multiscale_output = False
+            else:
+                reset_multiscale_output = True
+
+            hr_modules.append(
+                PHRModule(
+                    num_branches,
+                    block,
+                    num_blocks,
+                    in_channels,
+                    num_channels,
+                    reset_multiscale_output,
+                    with_cp=self.with_cp,
+                    norm_cfg=self.norm_cfg,
+                    conv_cfg=self.conv_cfg,
+                    block_init_cfg=block_init_cfg,
+                    attention_module=attention_module))
+
+        return Sequential(*hr_modules)
+
+    def parse_arch(self, arch, extra=None):
+        if extra is not None:
+            return extra
+        
+        assert arch in self.arch_zoo, \
+            ('Invalid arch, please choose arch from '
+             f'{list(self.arch_zoo.keys())}, or specify `extra` '
+             'argument directly.')
+        
+        extra = dict()
+        for i, stage_setting in enumerate(self.arch_zoo[arch], start=1):
+            extra[f'stage{i}'] = dict(
+                num_modules=stage_setting[0],
+                num_branches=stage_setting[1],
+                block=stage_setting[2],
+                num_blocks=stage_setting[3],
+                num_channels=stage_setting[4],
+            )
+
+        return extra
